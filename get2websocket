@@ -1,0 +1,138 @@
+#!/usr/bin/python3
+# BY @TheJoyBoy
+# Thanks to rayhan0x01
+# Idea and some code from https://rayhan0x01.github.io/ctf/2021/04/02/blind-sqli-over-websocket-automation.html
+
+from getopt import getopt 
+from sys import argv
+from http.server import SimpleHTTPRequestHandler
+from socketserver import TCPServer
+from urllib.parse import urlparse , parse_qs
+from websocket import create_connection
+from json import dumps
+from termcolor import colored
+
+LPORT = 65000
+WS_SERVER = ""
+CONTENT_TYPE = "text/plain"
+RET_IN_CONN = False
+SECURE = False
+
+
+def getOptions():
+    global LPORT , WS_SERVER , SECURE , CONTENT_TYPE
+    arg = argv[1:]
+
+    try:
+        options, _ = getopt(arg, "hsc:", ["lp=" , "local-port=" , "ws=" , "web-socket=" , "secure" , "content-type=" ,"help"])
+    except:
+        HELP() #HELP
+
+    if len(options) < 1:
+        HELP()
+    for option , value in options:
+        if option in ["-s" ,"--secure"]:
+            SECURE = True
+        elif option in ["-h" , "--help"]:
+            HELP()
+    
+    for option , value in options:
+        if option in ["--lp" , "--local-port"]: 
+            LPORT = int(value)
+        elif option in ["--ws" , "--web-socket"]:
+            WS_SERVER = convertHTTPToWEBSocket(value)
+        elif option in ["-c" , "--content-type"]:
+            CONTENT_TYPE = value
+
+def convertHTTPToWEBSocket(url):
+    global SECURE
+    if SECURE:
+        if url.startswith("https"):
+            conv = url.replace("https","wss")
+        else:
+            conv = url.replace("http","wss")
+    else:
+        conv = url.replace("http","ws")
+    return conv
+
+def convertToJson(params):
+    DATA = {}
+    for param in params:
+        DATA[param] = params[param][0]
+    
+    return dumps(DATA) # Return json object
+
+
+def sendToWSocket(params):
+    global WS_SERVER
+    jsonConverted = convertToJson(params)
+    
+    ws = create_connection(WS_SERVER)
+    
+    if RET_IN_CONN:
+        response = ws.recv()
+    ws.send(jsonConverted)
+    response = ws.recv()
+    ws.close()
+
+    if response:
+        return response
+    else:
+        return '' 
+
+def middleWareServer(HOST ,CONTENT_TYPE):
+    class CustomHandler(SimpleHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            try:
+                query = urlparse(self.path).query
+                params = parse_qs(query)
+
+                if params:
+                    back = sendToWSocket(params)
+                else:
+                    back = ''
+                    print(colored("[+] Please provide some parameters!", "yellow"))
+            except:
+                back = ''
+                print(colored("[+] An error occure !", "red"))
+            
+            self.send_header("Content-type", CONTENT_TYPE)
+            self.end_headers()
+            self.wfile.write(back.encode())
+            return
+
+    class _TCPServer(TCPServer):
+        allow_reuse_address = True
+    
+    httpd = _TCPServer(HOST , CustomHandler)
+    httpd.serve_forever()
+
+def HELP():
+    print("""Get2websocket is a middleware to automate stuffs like sql injection attacks over the websockets
+get2websocket convert the get requests into your websocket target so you can easly use tools like sqlmap with websockets!
+
+    Usage:
+        -h , --help         : show this help.
+        --ws , --web-socket : your target web socket (eq. http://example.com/ws , ws://redacted.com:9091 ...)
+        --lp , --local-port : local port to listen to.
+        -c , --contnet-type : content type to use with the server
+
+    Example:
+        if you have a websocket thats got some parameters like {"name":"joyboy" , "password":"test"}
+        then you can attack this middle ware with the exact parameters in the get request
+        http://localhost:{PORT}/?name=joyboy&password=test
+    
+    By @TheJoyBoy
+    Thanks to @rayhan0x01
+""")
+    exit()
+
+getOptions()
+
+print(colored("[+] Starting middleware server => http://localhost:%s" % LPORT , "green"))
+print(colored("[+] Websocket server => %s" % WS_SERVER , "green"))
+
+print("\nif you want to attack websocket thats take {\"id\":\"1\"} then attack http://localhost:%s/?id=1" % LPORT)
+print("-" * 60)
+middleWareServer(("0.0.0.0" , LPORT) , CONTENT_TYPE)
